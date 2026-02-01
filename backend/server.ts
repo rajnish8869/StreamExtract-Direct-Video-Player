@@ -6,7 +6,7 @@ import * as cheerio from 'cheerio';
 const app = express();
 const PORT = 3001;
 
-app.use(cors());
+app.use(cors() as any);
 app.use(express.json());
 
 interface AnalysisRequest {
@@ -20,7 +20,7 @@ const HEADERS = {
   'Accept-Language': 'en-US,en;q=0.5'
 };
 
-app.post('/api/analyze', async (req: Request, res: Response) => {
+app.post('/api/analyze', async (req: any, res: any) => {
   const { url } = req.body as AnalysisRequest;
 
   if (!url) {

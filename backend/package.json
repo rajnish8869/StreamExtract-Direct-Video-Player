@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "description": "Backend proxy for video extraction",
   "main": "server.js",
+  "type": "commonjs",
   "scripts": {
     "start:server": "ts-node server.ts",
     "build": "tsc"
