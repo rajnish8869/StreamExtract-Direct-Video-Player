@@ -1,0 +1,5 @@
+{
+  "name": "StreamExtract - Video Analyzer",
+  "description": "A robust video stream extractor and player that analyzes public URLs to find direct video streams (MP4, HLS) using a Node.js backend, enhanced with Gemini AI for content context.",
+  "requestFramePermissions": []
+}
