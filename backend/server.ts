@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { Request, Response, RequestHandler } from 'express';
 import cors from 'cors';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
@@ -6,7 +6,7 @@ import * as cheerio from 'cheerio';
 const app = express();
 const PORT = 3001;
 
-app.use(cors() as any);
+app.use(cors() as unknown as RequestHandler);
 app.use(express.json());
 
 interface AnalysisRequest {
@@ -14,10 +14,15 @@ interface AnalysisRequest {
 }
 
 // User-Agent masking to look like a browser
-const HEADERS = {
+const BASE_HEADERS = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
   'Accept-Language': 'en-US,en;q=0.5'
+};
+
+// Helper to unescape JSON-style slashes (https:\/\/ -> https://)
+const unescapeUrl = (str: string): string => {
+  return str.replace(/\\\//g, '/');
 };
 
 app.post('/api/analyze', async (req: any, res: any) => {
@@ -31,14 +36,27 @@ app.post('/api/analyze', async (req: any, res: any) => {
     console.log(`[Analyze] Fetching ${url}...`);
     
     // 1. Fetch Page Content
-    const response = await axios.get(url, { headers: HEADERS, timeout: 10000 });
+    // We add the Referer header to mimic a natural navigation, which helps with some sites (like terabox)
+    const headers = { ...BASE_HEADERS, 'Referer': url };
+    
+    const response = await axios.get(url, { 
+      headers, 
+      timeout: 15000,
+      maxRedirects: 5,
+      validateStatus: (status) => status < 400 
+    });
+    
     const html = response.data;
+    // The final URL might be different if redirects happened (e.g., 1024terabox -> terabox)
+    const finalUrl = response.request?.res?.responseUrl || url;
+    console.log(`[Analyze] Resolved to: ${finalUrl}`);
+
     const $ = cheerio.load(html);
 
     // 2. Extract Metadata
     const title = $('meta[property="og:title"]').attr('content') || $('title').text() || 'Unknown Title';
     const description = $('meta[property="og:description"]').attr('content') || $('meta[name="description"]').attr('content') || '';
-    const siteName = $('meta[property="og:site_name"]').attr('content') || new URL(url).hostname;
+    const siteName = $('meta[property="og:site_name"]').attr('content') || new URL(finalUrl).hostname;
     const poster = $('meta[property="og:image"]').attr('content');
 
     // 3. Heuristic Extraction Strategies
@@ -70,18 +88,26 @@ app.post('/api/analyze', async (req: any, res: any) => {
       }
     }
 
-    // Strategy C: Script Regex (Last resort for JSON blobs)
+    // Strategy C: Script Regex (Enhanced for JSON blobs with escaped slashes)
     if (!streamUrl) {
-      // Look for .mp4 or .m3u8 urls inside script tags
       const scriptContent = $('script').text();
-      const mp4Regex = /https?:\/\/[^"'\s]+\.mp4/g;
-      const m3u8Regex = /https?:\/\/[^"'\s]+\.m3u8/g;
       
-      const mp4Match = scriptContent.match(mp4Regex);
-      const m3u8Match = scriptContent.match(m3u8Regex);
-
-      if (mp4Match && mp4Match.length > 0) streamUrl = mp4Match[0];
-      if (!streamUrl && m3u8Match && m3u8Match.length > 0) streamUrl = m3u8Match[0];
+      // Regex matches https:// or https:\/\/ followed by chars until a quote or space, ending in .mp4 or .m3u8
+      // Note: We use a non-greedy match for the protocol separator to handle both / and \/
+      const broadRegex = /https?:\\?\/\\?\/[^"'\s<>]+\.(?:mp4|m3u8)/gi;
+      
+      const matches = scriptContent.match(broadRegex);
+      
+      if (matches && matches.length > 0) {
+        // Find the first match that isn't the input URL itself (avoid recursion loops)
+        for (const match of matches) {
+           const cleaned = unescapeUrl(match);
+           if (cleaned !== url && cleaned !== finalUrl) {
+               streamUrl = cleaned;
+               break;
+           }
+        }
+      }
     }
 
     // 4. Validate and Finalize
@@ -110,13 +136,14 @@ app.post('/api/analyze', async (req: any, res: any) => {
     } else {
       return res.status(404).json({
         success: false,
-        error: 'Could not detect a direct public video stream. The site may use DRM, complex encryption, or authentication.'
+        error: `Could not detect a direct video stream from ${new URL(finalUrl).hostname}. The site may use encrypted DRM, blobs, or require authentication.`
       });
     }
 
   } catch (error: any) {
     console.error('[Analyze Error]', error.message);
-    return res.status(500).json({ 
+    const statusCode = error.response ? error.response.status : 500;
+    return res.status(statusCode).json({ 
       success: false, 
       error: `Failed to analyze URL: ${error.message}` 
     });

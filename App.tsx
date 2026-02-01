@@ -26,16 +26,22 @@ const App: React.FC = () => {
         body: JSON.stringify({ url }),
       });
 
+      // Try to parse JSON response first, regardless of status code
+      const data = await response.json().catch(() => null);
+
       if (!response.ok) {
-        // Handle connection refused or server errors
+        // If the backend sent a specific error message (even with 404), use it.
+        if (data && data.error) {
+           throw new Error(data.error);
+        }
+
+        // Only throw generic "route not found" if we didn't get a JSON error response
         if (response.status === 404) {
              throw new Error("Backend route not found. Is the server running?");
         }
-        const errData = await response.json().catch(() => ({ error: 'Unknown server error' }));
-        throw new Error(errData.error || `Server error: ${response.status}`);
+        
+        throw new Error((data && data.error) || `Server error: ${response.status}`);
       }
-
-      const data = await response.json();
 
       if (data.success && data.data) {
         setStreamData(data.data);
